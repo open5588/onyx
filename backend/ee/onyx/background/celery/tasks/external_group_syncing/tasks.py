@@ -43,6 +43,7 @@ from onyx.configs.constants import (
     CELERY_GENERIC_BEAT_LOCK_TIMEOUT,
     CELERY_TASK_WAIT_FOR_FENCE_TIMEOUT,
     PERMISSION_SYNC_HEARTBEAT_INTERVAL,
+    PERMISSION_SYNC_LEASE_SELF_EXPIRY,
     PERMISSION_SYNC_LEASE_TIMEOUT,
     OnyxCeleryPriority,
     OnyxCeleryQueues,
@@ -602,6 +603,7 @@ def _timed_perform_external_group_sync(
             f"external_group_sync_attempt={attempt_id}",
             renew=partial(_renew_external_group_sync_lease, attempt_id),
             interval=PERMISSION_SYNC_HEARTBEAT_INTERVAL,
+            max_silence=PERMISSION_SYNC_LEASE_SELF_EXPIRY,
         )
         heartbeat.start()
         try:
@@ -631,7 +633,7 @@ def _timed_perform_external_group_sync(
                             f"timeout={timeout_seconds}s "
                             f"groups_processed={total_groups_processed}"
                         )
-                    if heartbeat.lost.is_set():
+                    if heartbeat.is_lost():
                         raise RuntimeError(
                             f"External group sync lost its lease: "
                             f"cc_pair={cc_pair_id} attempt={attempt_id}"
@@ -656,6 +658,7 @@ def _timed_perform_external_group_sync(
                             cc_pair_id=cc_pair_id,
                             external_groups=external_user_group_batch,
                             source=cc_pair.connector.source,
+                            owning_attempt_id=attempt_id,
                         )
                         cumulative_upsert_time += time.monotonic() - upsert_start
                         external_user_group_batch = []
@@ -670,6 +673,7 @@ def _timed_perform_external_group_sync(
                         cc_pair_id=cc_pair_id,
                         external_groups=external_user_group_batch,
                         source=cc_pair.connector.source,
+                        owning_attempt_id=attempt_id,
                     )
                     cumulative_upsert_time += time.monotonic() - upsert_start
             except Exception as e:
@@ -700,7 +704,10 @@ def _timed_perform_external_group_sync(
                 source_type,
                 cc_pair_id,
             )
-            remove_stale_external_groups(db_session, cc_pair_id)
+            # A lost lease means a replacement sync may own these rows now
+            remove_stale_external_groups(
+                db_session, cc_pair_id, owning_attempt_id=attempt_id
+            )
 
             # Calculate total unique users processed
             total_users_processed = len(seen_users)
