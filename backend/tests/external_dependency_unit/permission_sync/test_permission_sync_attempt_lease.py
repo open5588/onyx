@@ -29,6 +29,7 @@ from onyx.db.models import (
     User__ExternalUserGroupId,
 )
 from onyx.db.permission_sync_attempt import (
+    DocPermissionSyncProgress,
     PermissionSyncAttemptLostError,
     complete_doc_permission_sync_attempt,
     complete_external_group_sync_attempt,
@@ -259,3 +260,32 @@ def test_group_writes_are_refused_after_the_attempt_is_lost(
     ).all()
     assert len(remaining) == 1
     assert remaining[0].stale
+
+
+def test_renewal_writes_progress_and_completion_replaces_it(
+    db_session: Session,
+) -> None:
+    attempt_id = _started_attempt(_DOC, db_session)
+    progressed_at = datetime.now(timezone.utc)
+
+    assert renew_doc_permission_sync_attempt_lease(
+        attempt_id,
+        db_session,
+        DocPermissionSyncProgress(
+            total_docs_synced=40,
+            docs_with_permission_errors=2,
+            last_progress_at=progressed_at,
+        ),
+    )
+    db_session.expire_all()
+    attempt = db_session.get(DocPermissionSyncAttempt, attempt_id)
+    assert attempt is not None
+    assert attempt.total_docs_synced == 40
+    assert attempt.docs_with_permission_errors == 2
+    assert attempt.last_progress_at == progressed_at
+
+    completed = complete_doc_permission_sync_attempt(
+        db_session, attempt_id, total_docs_synced=50, docs_with_permission_errors=3
+    )
+    assert completed.total_docs_synced == 50
+    assert completed.docs_with_permission_errors == 3

@@ -37,7 +37,7 @@ from onyx.background.celery.celery_redis import (
 from onyx.background.celery.tasks.beat_schedule import CLOUD_BEAT_MULTIPLIER_DEFAULT
 from onyx.background.celery.tasks.shared.lease_heartbeat import LeaseHeartbeat
 from onyx.background.error_logging import emit_background_error
-from onyx.configs.app_configs import JOB_TIMEOUT
+from onyx.configs.app_configs import JOB_TIMEOUT, PERMISSION_SYNC_TIMEOUT
 from onyx.configs.constants import (
     CELERY_EXTERNAL_GROUP_SYNC_LOCK_TIMEOUT,
     CELERY_GENERIC_BEAT_LOCK_TIMEOUT,
@@ -62,6 +62,7 @@ from onyx.db.enums import (
 )
 from onyx.db.models import ConnectorCredentialPair
 from onyx.db.permission_sync_attempt import (
+    ExternalGroupSyncProgress,
     complete_external_group_sync_attempt,
     create_external_group_sync_attempt,
     fail_expired_external_group_sync_attempts,
@@ -104,9 +105,11 @@ def _fail_external_group_sync_attempt(attempt_id: int, error_msg: str) -> None:
         )
 
 
-def _renew_external_group_sync_lease(attempt_id: int) -> bool:
+def _renew_external_group_sync_lease(
+    attempt_id: int, progress: ExternalGroupSyncProgress
+) -> bool:
     with get_session_with_current_tenant() as db_session:
-        return renew_external_group_sync_attempt_lease(attempt_id, db_session)
+        return renew_external_group_sync_attempt_lease(attempt_id, db_session, progress)
 
 
 def fail_expired_external_group_sync_attempts_for_tenant() -> None:
@@ -516,7 +519,7 @@ def connector_external_group_sync_generator_task(
 def _perform_external_group_sync(
     cc_pair_id: int,
     tenant_id: str,
-    timeout_seconds: int = JOB_TIMEOUT,
+    timeout_seconds: int = PERMISSION_SYNC_TIMEOUT,
 ) -> None:
     sync_start = time.monotonic()
     connector_type: str = "unknown"
@@ -547,7 +550,7 @@ def _timed_perform_external_group_sync(
     cc_pair_id: int,
     tenant_id: str,
     attempt_id: int,
-    timeout_seconds: int = JOB_TIMEOUT,
+    timeout_seconds: int = PERMISSION_SYNC_TIMEOUT,
 ) -> str:
     with get_session_with_current_tenant() as db_session:
         cc_pair = get_connector_credential_pair_from_id(
@@ -599,9 +602,10 @@ def _timed_perform_external_group_sync(
         mark_external_group_sync_attempt_in_progress(attempt_id, db_session)
         logger.info("Marked external group sync attempt %s as in progress", attempt_id)
 
+        progress = ExternalGroupSyncProgress()
         heartbeat = LeaseHeartbeat(
             f"external_group_sync_attempt={attempt_id}",
-            renew=partial(_renew_external_group_sync_lease, attempt_id),
+            renew=partial(_renew_external_group_sync_lease, attempt_id, progress),
             interval=PERMISSION_SYNC_HEARTBEAT_INTERVAL,
             max_silence=PERMISSION_SYNC_LEASE_SELF_EXPIRY,
         )
@@ -627,15 +631,16 @@ def _timed_perform_external_group_sync(
                     elapsed = time.monotonic() - start_time
                     if elapsed > timeout_seconds:
                         raise RuntimeError(
-                            f"External group sync task timed out: "
+                            f"External group sync stopped: timed out after "
+                            f"{elapsed:.0f}s "
+                            f"(PERMISSION_SYNC_TIMEOUT_SECONDS={timeout_seconds}): "
                             f"cc_pair={cc_pair_id} "
-                            f"elapsed={elapsed:.0f}s "
-                            f"timeout={timeout_seconds}s "
                             f"groups_processed={total_groups_processed}"
                         )
                     if heartbeat.is_lost():
                         raise RuntimeError(
-                            f"External group sync lost its lease: "
+                            f"External group sync stopped: attempt lost its lease "
+                            f"(the reaper failed it): "
                             f"cc_pair={cc_pair_id} attempt={attempt_id}"
                         )
 
@@ -647,6 +652,12 @@ def _timed_perform_external_group_sync(
                         external_user_group.user_emails
                     )
                     seen_users.update(external_user_group.user_emails)
+                    progress.total_groups_processed = total_groups_processed
+                    progress.total_group_memberships_synced = (
+                        total_group_memberships_synced
+                    )
+                    progress.total_users_processed = len(seen_users)
+                    progress.last_progress_at = datetime.now(timezone.utc)
 
                     if len(external_user_group_batch) >= _EXTERNAL_GROUP_BATCH_SIZE:
                         logger.debug(
