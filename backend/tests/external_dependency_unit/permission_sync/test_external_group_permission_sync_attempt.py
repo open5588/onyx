@@ -34,6 +34,9 @@ from onyx.db.permission_sync_attempt import (
     mark_external_group_sync_attempt_in_progress,
 )
 from tests.external_dependency_unit.conftest import create_test_user
+from tests.external_dependency_unit.permission_sync.conftest import (
+    create_finished_external_group_sync_attempt,
+)
 
 
 def _create_test_connector_credential_pair(
@@ -248,7 +251,9 @@ class TestExternalGroupPermissionSyncAttempt:
         # Create multiple attempts for the cc_pair
         attempt_ids = []
         for _ in range(5):
-            attempt_id = create_external_group_sync_attempt(cc_pair.id, db_session)
+            attempt_id = create_finished_external_group_sync_attempt(
+                cc_pair.id, db_session
+            )
             attempt_ids.append(attempt_id)
 
         # Get recent attempts
@@ -468,8 +473,12 @@ class TestExternalGroupPermissionSyncAttempt:
         cc_pair = _create_test_connector_credential_pair(db_session)
 
         # Create connector-specific attempts
-        cc_attempt_1 = create_external_group_sync_attempt(cc_pair.id, db_session)
-        cc_attempt_2 = create_external_group_sync_attempt(cc_pair.id, db_session)
+        cc_attempt_1 = create_finished_external_group_sync_attempt(
+            cc_pair.id, db_session
+        )
+        cc_attempt_2 = create_finished_external_group_sync_attempt(
+            cc_pair.id, db_session
+        )
 
         # Create global attempts
         global_attempt_1 = create_external_group_sync_attempt(None, db_session)

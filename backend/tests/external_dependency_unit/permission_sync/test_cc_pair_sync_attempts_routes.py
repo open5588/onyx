@@ -48,6 +48,7 @@ from onyx.server.documents.cc_pair import (
 from tests.external_dependency_unit.conftest import create_test_user
 from tests.external_dependency_unit.permission_sync.conftest import (
     create_finished_doc_permission_sync_attempt,
+    create_finished_external_group_sync_attempt,
 )
 
 # Every applicable=True path here depends on the EE-only ``sync_params``
@@ -176,7 +177,8 @@ class TestGetRelevantExternalGroupSyncAttemptsForCcPair:
         cc_pair = _create_cc_pair(db_session, DocumentSource.GOOGLE_DRIVE)
 
         attempt_ids = [
-            create_external_group_sync_attempt(cc_pair.id, db_session) for _ in range(5)
+            create_finished_external_group_sync_attempt(cc_pair.id, db_session)
+            for _ in range(5)
         ]
 
         result = get_relevant_external_group_sync_attempts_for_cc_pair(
