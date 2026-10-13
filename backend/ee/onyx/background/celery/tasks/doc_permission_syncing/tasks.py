@@ -61,9 +61,11 @@ from onyx.db.hierarchy import (
 from onyx.db.models import ConnectorCredentialPair
 from onyx.db.permission_sync_attempt import (
     DocPermissionSyncProgress,
+    PermissionSyncAttemptLostError,
     complete_doc_permission_sync_attempt,
     fail_expired_doc_permission_sync_attempts,
     get_cc_pair_ids_with_open_doc_permission_sync_attempt,
+    lock_doc_permission_sync_attempt_if_owned,
     mark_doc_permission_sync_attempt_failed,
     mark_doc_permission_sync_attempt_in_progress,
     renew_doc_permission_sync_attempt_lease,
@@ -535,6 +537,7 @@ def connector_permission_sync_generator_task(
 
             result = update_element_permissions_batch(
                 tenant_id=tenant_id,
+                attempt_id=attempt_id,
                 new_permissions=[doc_external_access],
                 source_string=connector_type,
                 connector_id=connector_id,
@@ -613,12 +616,17 @@ class PermissionSyncResult(NamedTuple):
 
 def update_element_permissions_batch(
     tenant_id: str,
+    attempt_id: int,
     new_permissions: list[ElementExternalAccess],
     source_string: str,
     connector_id: int,
     credential_id: int,
 ) -> PermissionSyncResult:
-    """Update permissions for documents and hierarchy nodes.
+    """Update permissions for documents and hierarchy nodes, while
+    `attempt_id` is still IN_PROGRESS.
+
+    Raises PermissionSyncAttemptLostError when the attempt was closed: a
+    replacement sync may own these elements now.
 
     Returns:
         PermissionSyncResult containing counts of successful updates and errors
@@ -661,12 +669,15 @@ def update_element_permissions_batch(
         try:
             element_update_permissions(
                 tenant_id,
+                attempt_id,
                 permissions,
                 source_string,
                 connector_id,
                 credential_id,
             )
             num_permissions += 1
+        except PermissionSyncAttemptLostError:
+            raise
         except Exception:
             num_errors += 1
             task_logger.exception(
@@ -689,6 +700,7 @@ def update_element_permissions_batch(
 )
 def element_update_permissions(
     tenant_id: str,
+    attempt_id: int,
     permissions: ElementExternalAccess,
     source_type_str: str,
     connector_id: int,
@@ -714,6 +726,9 @@ def element_update_permissions(
                 emails=list(external_access.external_user_emails),
                 continue_on_error=True,
             )
+
+            # After the user insert, which commits, so the lock covers this write
+            lock_doc_permission_sync_attempt_if_owned(attempt_id, db_session)
 
             if isinstance(permissions, DocExternalAccess):
                 # Document permission update
