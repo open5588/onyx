@@ -68,6 +68,7 @@ from onyx.db.hierarchy import (
 )
 from onyx.db.models import ConnectorCredentialPair
 from onyx.db.models import HierarchyNode as DBHierarchyNode
+from onyx.db.permission_sync_attempt import get_open_doc_permission_sync_attempt
 from onyx.db.sync_record import insert_sync_record, update_sync_record_status
 from onyx.db.tag import delete_orphan_tags_batched
 from onyx.redis.redis_connector import RedisConnector
@@ -435,7 +436,7 @@ def try_creating_prune_generator_task(
             return None
 
         # skip pruning if doc permissions sync is running
-        if redis_connector.permissions.fenced:
+        if get_open_doc_permission_sync_attempt(cc_pair.id, db_session) is not None:
             logger.info(
                 "try_creating_prune_generator_task: cc_pair=%s permissions sync running",
                 cc_pair.id,

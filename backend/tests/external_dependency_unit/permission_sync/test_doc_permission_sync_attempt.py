@@ -22,6 +22,7 @@ from onyx.db.permission_sync_attempt import (
     mark_doc_permission_sync_attempt_in_progress,
 )
 from tests.external_dependency_unit.permission_sync.conftest import (
+    create_finished_doc_permission_sync_attempt,
     create_test_connector_credential_pair,
 )
 
@@ -184,7 +185,9 @@ class TestDocPermissionSyncAttempt:
         # Create multiple attempts
         attempt_ids = []
         for _ in range(5):
-            attempt_id = create_doc_permission_sync_attempt(cc_pair.id, db_session)
+            attempt_id = create_finished_doc_permission_sync_attempt(
+                cc_pair.id, db_session
+            )
             attempt_ids.append(attempt_id)
 
         # Get recent attempts

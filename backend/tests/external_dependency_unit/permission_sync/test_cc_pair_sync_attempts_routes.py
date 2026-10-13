@@ -36,7 +36,6 @@ from onyx.db.models import (
     User,
 )
 from onyx.db.permission_sync_attempt import (
-    create_doc_permission_sync_attempt,
     create_external_group_sync_attempt,
     get_relevant_external_group_sync_attempts_for_cc_pair,
 )
@@ -47,6 +46,9 @@ from onyx.server.documents.cc_pair import (
     get_cc_pair_permission_sync_attempts,
 )
 from tests.external_dependency_unit.conftest import create_test_user
+from tests.external_dependency_unit.permission_sync.conftest import (
+    create_finished_doc_permission_sync_attempt,
+)
 
 # Every applicable=True path here depends on the EE-only ``sync_params``
 # helpers (``source_requires_doc_sync`` etc.); the no-op fallback would
@@ -240,7 +242,8 @@ class TestGetCcPairPermissionSyncAttemptsRoute:
         cc_pair = _create_cc_pair(db_session, DocumentSource.GOOGLE_DRIVE)
 
         attempt_ids = [
-            create_doc_permission_sync_attempt(cc_pair.id, db_session) for _ in range(3)
+            create_finished_doc_permission_sync_attempt(cc_pair.id, db_session)
+            for _ in range(3)
         ]
 
         response = get_cc_pair_permission_sync_attempts(
@@ -255,12 +258,12 @@ class TestGetCcPairPermissionSyncAttemptsRoute:
         assert response.total_items == 3
         returned_ids = [item.id for item in response.items]
         assert set(returned_ids) == set(attempt_ids)
-        # Snapshot fields populated and statuses default to NOT_STARTED.
+        # Snapshot fields populated from the finished attempts.
         for item in response.items:
-            assert item.status == PermissionSyncStatus.NOT_STARTED
+            assert item.status == PermissionSyncStatus.FAILED
             assert item.total_docs_synced == 0
             assert item.docs_with_permission_errors == 0
-            assert item.time_finished is None
+            assert item.time_finished is not None
 
     def test_pagination_slices_correctly(
         self,
@@ -270,7 +273,8 @@ class TestGetCcPairPermissionSyncAttemptsRoute:
         cc_pair = _create_cc_pair(db_session, DocumentSource.GOOGLE_DRIVE)
 
         attempt_ids = [
-            create_doc_permission_sync_attempt(cc_pair.id, db_session) for _ in range(5)
+            create_finished_doc_permission_sync_attempt(cc_pair.id, db_session)
+            for _ in range(5)
         ]
 
         first_page = get_cc_pair_permission_sync_attempts(
